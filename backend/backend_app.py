@@ -6,16 +6,41 @@ stored in an in-memory list.
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_swagger_ui import get_swaggerui_blueprint
 
+# -------------------------
+# APP SETUP
+# -------------------------
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
 
+# -------------------------
+# IN-MEMORY DATABASE
+# -------------------------
 POSTS = [
     {"id": 1, "title": "First post", "content": "This is the first post."},
     {"id": 2, "title": "Second post", "content": "This is the second post."},
 ]
 
+# -------------------------
+# SWAGGER SETUP
+# -------------------------
 
+SWAGGER_URL="/api/docs"
+API_URL="/static/masterblog.json"
+
+swagger_ui_blueprint = get_swaggerui_blueprint(
+    SWAGGER_URL,
+    API_URL,
+    config={
+        'app_name': 'Masterblog API'
+    }
+)
+app.register_blueprint(swagger_ui_blueprint, url_prefix=SWAGGER_URL)
+
+# -------------------------
+# ROUTES
+# -------------------------
 @app.route("/api/posts", methods=["GET"])
 def get_posts():
     """Return all posts, optionally sorted by title or content.
@@ -80,7 +105,7 @@ def delete_post(post_id):
     for post in POSTS:
         if post["id"] == post_id:
             POSTS.remove(post)
-            return jsonify({"message": (f"Post {post_id} has been deleted.")}), 200
+            return jsonify({"message": f"Post {post_id} has been deleted."}), 200
 
     return jsonify({"error": "Post Not Found"}), 404
 
