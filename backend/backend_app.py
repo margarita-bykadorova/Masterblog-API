@@ -7,6 +7,7 @@ stored in an in-memory list.
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_swagger_ui import get_swaggerui_blueprint
+from datetime import datetime
 
 # -------------------------
 # APP SETUP
@@ -18,8 +19,20 @@ CORS(app)
 # IN-MEMORY DATABASE
 # -------------------------
 POSTS = [
-    {"id": 1, "title": "First post", "content": "This is the first post."},
-    {"id": 2, "title": "Second post", "content": "This is the second post."},
+    {
+        "id": 1,
+        "title": "My First Blog Post",
+        "content": "This is the content of my first blog post.",
+        "author": "Your Name",
+        "date": "2023-06-07"
+    },
+    {
+        "id": 2,
+        "title": "My Second Blog Post",
+        "content": "This is the content of my second blog post.",
+        "author": "Your Name",
+        "date": "2023-06-08"
+    }
 ]
 
 # -------------------------
@@ -43,10 +56,10 @@ app.register_blueprint(swagger_ui_blueprint, url_prefix=SWAGGER_URL)
 # -------------------------
 @app.route("/api/posts", methods=["GET"])
 def get_posts():
-    """Return all posts, optionally sorted by title or content.
+    """Return all posts, optionally sorted by title, content, author or date.
 
     Query parameters:
-        sort: "title" or "content" (optional)
+        sort: "title", "content", "author" or "date" (optional)
         direction: "asc" or "desc" (optional, defaults to "asc")
 
     If no sort is provided, posts are returned in their original order.
@@ -57,18 +70,24 @@ def get_posts():
     if sort is None:
         return jsonify(POSTS), 200
 
-    if sort not in ("title", "content"):
-        return jsonify({"error": "Invalid sort. Use 'title' or 'content'."}), 400
+    if sort not in ("title", "content", "author", "date"):
+        return jsonify({"error": "Invalid sort request."}), 400
 
     if direction not in ("asc", "desc"):
-        return jsonify({"error": "Invalid direction. Use 'asc' or 'desc'."}), 400
+        return jsonify({"error": "Invalid direction."}), 400
 
     reverse = (direction == "desc")
-    sorted_posts = sorted(
-        POSTS,
-        key=lambda post: post[sort].lower(),
-        reverse=reverse,
-    )
+
+    if sort == "date":
+        # Parse date string "YYYY-MM-DD" into a real date
+        def key_func(post):
+            return datetime.strptime(post["date"], "%Y-%m-%d")
+    else:
+        # For title, content, author → case-insensitive string sort
+        def key_func(post):
+            return post[sort].lower()
+
+    sorted_posts = sorted(POSTS, key=key_func, reverse=reverse)
     return jsonify(sorted_posts), 200
 
 
@@ -77,8 +96,7 @@ def add_post():
     """Create a new post.
 
     Expects JSON body with:
-        title: non-empty string
-        content: non-empty string
+    title, content, author and date.
     """
     new_post = request.get_json()
 
@@ -87,14 +105,26 @@ def add_post():
 
     title = new_post.get("title", "").strip()
     content = new_post.get("content", "").strip()
+    author = new_post.get("author", "").strip()
+    date = new_post.get("date", "").strip()
 
     if not title:
         return jsonify({"error": "Valid title is required"}), 400
     if not content:
         return jsonify({"error": "Valid content is required"}), 400
+    if not author:
+        return jsonify({"error": "Valid author is required"}), 400
+    if not date:
+        return jsonify({"error": "Valid date is required"}), 400
 
     new_id = max(post["id"] for post in POSTS) + 1
-    new_post = {"id": new_id, "title": title, "content": content}
+    new_post = {
+        "id": new_id,
+        "title": title,
+        "content": content,
+        "author": author,
+        "date": date
+    }
     POSTS.append(new_post)
     return jsonify(new_post), 201
 
@@ -115,8 +145,7 @@ def update_post(post_id):
     """Update an existing post by ID.
 
     Expects JSON body with optional fields:
-        title: string
-        content: string
+    title, content, author, date.
     """
     new_data = request.get_json()
     if new_data is None:
@@ -128,6 +157,10 @@ def update_post(post_id):
                 post["title"] = new_data["title"]
             if "content" in new_data:
                 post["content"] = new_data["content"]
+            if "author" in new_data:
+                post["author"] = new_data["author"]
+            if "date" in new_data:
+                post["date"] = new_data["date"]
             return jsonify(post), 200
 
     return jsonify({"error": "Post Not Found"}), 404
@@ -135,33 +168,42 @@ def update_post(post_id):
 
 @app.route("/api/posts/search", methods=["GET"])
 def search_posts():
-    """Search posts by title and/or content.
+    """Search posts by title, content, author and/or date.
 
-    Query parameters:
-        title: substring to search in the title (optional)
-        content: substring to search in the content (optional)
+    Query parameters (all optional, can be combined):
+        title: substring to search in the title
+        content: substring to search in the content
+        author: substring to search in the author
+        date: exact date to match (YYYY-MM-DD)
 
     Returns a list of matching posts. If no query is provided,
     an empty list is returned.
     """
     title = request.args.get("title")
     content = request.args.get("content")
+    author = request.args.get("author")
+    date = request.args.get("date")
 
-    if not title and not content:
+    # If no filters provided, return an empty list
+    if not any([title, content, author, date]):
         return jsonify([]), 200
 
     filtered = []
     for post in POSTS:
-        post_title = post["title"].lower()
-        post_content = post["content"].lower()
-
         conditions = []
-        if title:
-            conditions.append(title.lower() in post_title)
-        if content:
-            conditions.append(content.lower() in post_content)
 
-        if any(conditions):
+        if title:
+            conditions.append(title.lower() in post["title"].lower())
+        if content:
+            conditions.append(content.lower() in post["content"].lower())
+        if author:
+            conditions.append(author.lower() in post["author"].lower())
+        if date:
+            # Exact match for date
+            conditions.append(date == post["date"])
+
+        if conditions and all(conditions):
+            # All provided filters must match this post
             filtered.append(post)
 
     return jsonify(filtered), 200
