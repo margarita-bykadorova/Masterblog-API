@@ -1,13 +1,16 @@
 """Simple blog posts REST API using Flask.
 
 Provides endpoints to list, create, update, delete and search posts
-stored in an in-memory list.
+stored in a JSON file on disk.
 """
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_swagger_ui import get_swaggerui_blueprint
 from datetime import datetime
+import json
+
+DATA_FILE = "storage.json"
 
 # -------------------------
 # APP SETUP
@@ -16,29 +19,40 @@ app = Flask(__name__)
 CORS(app)
 
 # -------------------------
-# IN-MEMORY DATABASE
+# HELPERS
 # -------------------------
-POSTS = [
-    {
-        "id": 1,
-        "title": "My First Blog Post",
-        "content": "This is the content of my first blog post.",
-        "author": "Your Name",
-        "date": "2023-06-07"
-    },
-    {
-        "id": 2,
-        "title": "My Second Blog Post",
-        "content": "This is the content of my second blog post.",
-        "author": "Your Name",
-        "date": "2023-06-08"
-    }
-]
+def get_data():
+    """Return all saved blog posts from the JSON storage file.
+
+    If the file does not exist, return an empty list.
+    If the file content is invalid, return an empty list as well.
+    """
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+            if not isinstance(data, list):
+                return []
+            return data
+    except FileNotFoundError:
+        # First run: file doesn't exist yet
+        return []
+    except json.JSONDecodeError:
+        # File exists but is not valid JSON
+        return []
+
+
+def save_data(data):
+    """Write updated blog posts to the JSON storage file."""
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=4)
+    except OSError:
+        # Writing failed (disk permission, full disk, etc.)
+        raise RuntimeError("Failed to save data to JSON file.")
 
 # -------------------------
 # SWAGGER SETUP
 # -------------------------
-
 SWAGGER_URL="/api/docs"
 API_URL="/static/masterblog.json"
 
@@ -64,11 +78,12 @@ def get_posts():
 
     If no sort is provided, posts are returned in their original order.
     """
+    posts = get_data()
     sort = request.args.get("sort")
     direction = request.args.get("direction", "asc")
 
     if sort is None:
-        return jsonify(POSTS), 200
+        return jsonify(posts), 200
 
     if sort not in ("title", "content", "author", "date"):
         return jsonify({"error": "Invalid sort request."}), 400
@@ -87,7 +102,7 @@ def get_posts():
         def key_func(post):
             return post[sort].lower()
 
-    sorted_posts = sorted(POSTS, key=key_func, reverse=reverse)
+    sorted_posts = sorted(posts, key=key_func, reverse=reverse)
     return jsonify(sorted_posts), 200
 
 
@@ -98,6 +113,7 @@ def add_post():
     Expects JSON body with:
     title, content, author and date.
     """
+    posts = get_data()
     new_post = request.get_json()
 
     if not new_post:
@@ -117,7 +133,13 @@ def add_post():
     if not date:
         return jsonify({"error": "Valid date is required"}), 400
 
-    new_id = max(post["id"] for post in POSTS) + 1
+        # ✅ Validate date format "YYYY-MM-DD"
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "Date must be YYYY-MM-DD"}), 400
+
+    new_id = max((post["id"] for post in posts), default=0) + 1
     new_post = {
         "id": new_id,
         "title": title,
@@ -125,16 +147,25 @@ def add_post():
         "author": author,
         "date": date
     }
-    POSTS.append(new_post)
+    posts.append(new_post)
+    try:
+        save_data(posts)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
     return jsonify(new_post), 201
 
 
 @app.route("/api/posts/<int:post_id>", methods=["DELETE"])
 def delete_post(post_id):
     """Delete a post by its ID."""
-    for post in POSTS:
+    posts = get_data()
+    for post in posts:
         if post["id"] == post_id:
-            POSTS.remove(post)
+            posts.remove(post)
+            try:
+                save_data(posts)
+            except RuntimeError as exc:
+                return jsonify({"error": str(exc)}), 500
             return jsonify({"message": f"Post {post_id} has been deleted."}), 200
 
     return jsonify({"error": "Post Not Found"}), 404
@@ -147,11 +178,12 @@ def update_post(post_id):
     Expects JSON body with optional fields:
     title, content, author, date.
     """
+    posts = get_data()
     new_data = request.get_json()
     if new_data is None:
         new_data = {}
 
-    for post in POSTS:
+    for post in posts:
         if post["id"] == post_id:
             if "title" in new_data:
                 post["title"] = new_data["title"]
@@ -160,7 +192,16 @@ def update_post(post_id):
             if "author" in new_data:
                 post["author"] = new_data["author"]
             if "date" in new_data:
-                post["date"] = new_data["date"]
+                new_date = new_data["date"].strip()
+                try:
+                    datetime.strptime(new_date, "%Y-%m-%d")
+                except ValueError:
+                    return jsonify({"error": "Date must be YYYY-MM-DD"}), 400
+                post["date"] = new_date
+            try:
+                save_data(posts)
+            except RuntimeError as exc:
+                return jsonify({"error": str(exc)}), 500
             return jsonify(post), 200
 
     return jsonify({"error": "Post Not Found"}), 404
@@ -179,6 +220,7 @@ def search_posts():
     Returns a list of matching posts. If no query is provided,
     an empty list is returned.
     """
+    posts = get_data()
     title = request.args.get("title")
     content = request.args.get("content")
     author = request.args.get("author")
@@ -189,7 +231,7 @@ def search_posts():
         return jsonify([]), 200
 
     filtered = []
-    for post in POSTS:
+    for post in posts:
         conditions = []
 
         if title:
