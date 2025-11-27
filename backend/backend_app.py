@@ -133,7 +133,7 @@ def add_post():
     if not date:
         return jsonify({"error": "Valid date is required"}), 400
 
-        # ✅ Validate date format "YYYY-MM-DD"
+    # Validate date format "YYYY-MM-DD"
     try:
         datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
